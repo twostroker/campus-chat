@@ -2,12 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Send, UserCircle, Users, MessageCircle, X, RefreshCw, Hash, Sparkles } from 'lucide-react';
 import { createClient } from '@supabase/supabase-js'
 
-const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-)
-
-export default supabase
 
 const SUPABASE_URL = 'https://qglfydfcnryomdolmtuk.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFnbGZ5ZGZjbnJ5b21kb2xtdHVrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjIxMzg3OTQsImV4cCI6MjA3NzcxNDc5NH0.-RMW7vzU-NxuS8oMawOa13pkaGFO8z7sQOIJ0CYtoOQ';
