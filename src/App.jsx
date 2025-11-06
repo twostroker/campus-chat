@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, UserCircle, Users, MessageCircle, X, RefreshCw, Hash, Sparkles } from 'lucide-react';
-import { createClient } from '@supabase/supabase-js'
-
 
 const SUPABASE_URL = 'https://qglfydfcnryomdolmtuk.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFnbGZ5ZGZjbnJ5b21kb2xtdHVrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjIxMzg3OTQsImV4cCI6MjA3NzcxNDc5NH0.-RMW7vzU-NxuS8oMawOa13pkaGFO8z7sQOIJ0CYtoOQ';
@@ -22,11 +20,18 @@ class SupabaseClient {
   }
   async select(table, columns = '*') {
     const response = await fetch(`${this.url}/rest/v1/${table}?select=${columns}`, { method: 'GET', headers: this.headers });
-    return response.ok ? await response.json() : [];
+    if (!response.ok) {
+      console.error('Supabase select error:', await response.text());
+      return [];
+    }
+    return await response.json();
   }
   async insert(table, data) {
     const response = await fetch(`${this.url}/rest/v1/${table}`, { method: 'POST', headers: this.headers, body: JSON.stringify(data) });
-    if (!response.ok) throw new Error(await response.text());
+    if (!response.ok) {
+      console.error('Supabase insert error:', await response.text());
+      throw new Error(await response.text());
+    }
     return await response.json();
   }
   async delete(table, filter) {
@@ -50,7 +55,6 @@ function Confetti() {
     </div>
   );
 }
-
 function FloatingParticles() {
   return (
     <div className="fixed inset-0 pointer-events-none overflow-hidden">
@@ -61,7 +65,6 @@ function FloatingParticles() {
     </div>
   );
 }
-
 function SkeletonLoader() {
   return (
     <div className="flex-1 p-6 space-y-4">
@@ -79,11 +82,13 @@ function SkeletonLoader() {
 
 export default function CampusChat() {
   const [username, setUsername] = useState('');
+  const [college, setCollege] = useState('');
   const [hashtags, setHashtags] = useState('');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [partnerUsername, setPartnerUsername] = useState('');
+  const [partnerCollege, setPartnerCollege] = useState('');
   const [messages, setMessages] = useState([]);
   const [messageInput, setMessageInput] = useState('');
   const [userId] = useState(() => 'u' + Date.now() + Math.random().toString(36).slice(2, 9));
@@ -103,14 +108,12 @@ export default function CampusChat() {
   const typingTimeoutRef = useRef(null);
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
-  
   useEffect(() => {
     return () => {
       if (searchIntervalRef.current) clearInterval(searchIntervalRef.current);
       if (messageCheckRef.current) clearInterval(messageCheckRef.current);
     };
   }, []);
-  
   useEffect(() => {
     const cleanup = async () => {
       try {
@@ -121,29 +124,28 @@ export default function CampusChat() {
     window.addEventListener('beforeunload', cleanup);
     return () => { cleanup(); window.removeEventListener('beforeunload', cleanup); };
   }, [userId, roomId]);
-
   const startSearching = async () => {
     try {
-      await supabase.current.insert('waiting_users', { user_id: userId, username: username, hashtags: hashtags.trim().toLowerCase() || null });
+      await supabase.current.insert('waiting_users', { user_id: userId, username: username, hashtags: hashtags.trim().toLowerCase() || null, college: college || null });
       searchIntervalRef.current = setInterval(() => findMatch(), 1000);
       findMatch();
     } catch (err) { console.error('Error starting search:', err); }
   };
-
   const findMatch = async () => {
     try {
       const rooms = await supabase.current.select('active_rooms');
       const myRoom = rooms.find(r => r.user1_id === userId || r.user2_id === userId);
-      
       if (myRoom) {
         const partner = myRoom.user1_id === userId ? myRoom.user2_name : myRoom.user1_name;
+        const partnerCol = myRoom.user1_id === userId ? myRoom.user2_college : myRoom.user1_college;
         await supabase.current.delete('waiting_users', `user_id=eq.${userId}`);
-        
+
         setRoomId(myRoom.room_id);
         setPartnerUsername(partner);
+        setPartnerCollege(partnerCol || '');
         setIsSearching(false);
         setIsLoading(true);
-        
+
         setShowConfetti(true);
         setTimeout(() => {
           setShowConfetti(false);
@@ -168,15 +170,24 @@ export default function CampusChat() {
 
       const newRoomId = 'r' + Date.now() + Math.random().toString(36).slice(2, 7);
 
-      await supabase.current.insert('active_rooms', { room_id: newRoomId, user1_id: userId, user1_name: username, user2_id: match.user_id, user2_name: match.username });
+      await supabase.current.insert('active_rooms', {
+        room_id: newRoomId,
+        user1_id: userId,
+        user1_name: username,
+        user1_college: college,
+        user2_id: match.user_id,
+        user2_name: match.username,
+        user2_college: match.college
+      });
       await supabase.current.delete('waiting_users', `user_id=eq.${userId}`);
       await supabase.current.delete('waiting_users', `user_id=eq.${match.user_id}`);
 
       setRoomId(newRoomId);
       setPartnerUsername(match.username);
+      setPartnerCollege(match.college || '');
       setIsSearching(false);
       setIsLoading(true);
-      
+
       setShowConfetti(true);
       setTimeout(() => {
         setShowConfetti(false);
@@ -188,42 +199,37 @@ export default function CampusChat() {
       startMessageCheck(newRoomId);
     } catch (err) { console.error('Error in findMatch:', err); }
   };
-
   const startMessageCheck = (room) => {
     if (messageCheckRef.current) clearInterval(messageCheckRef.current);
-    
+
     const check = async () => {
       try {
         const allMsgs = await supabase.current.select('messages');
         const roomMsgs = allMsgs.filter(m => m.room_id === room);
-        
+
         if (roomMsgs.length > 0) {
           const sorted = roomMsgs.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
           setMessages(sorted);
         }
-        
+
         const rooms = await supabase.current.select('active_rooms');
         const currentRoom = rooms.find(r => r.room_id === room);
-        
+
         if (!currentRoom) {
           if (messageCheckRef.current) { clearInterval(messageCheckRef.current); messageCheckRef.current = null; }
           setMessages(prev => [...prev, { room_id: room, sender_id: 'system', sender_name: 'System', message: `${partnerUsername} has disconnected`, created_at: new Date().toISOString() }]);
-          setTimeout(() => { setIsConnected(false); setPartnerUsername(''); setMessages([]); setRoomId(null); }, 2000);
+          setTimeout(() => { setIsConnected(false); setPartnerUsername(''); setPartnerCollege(''); setMessages([]); setRoomId(null); }, 2000);
           return;
         }
-
         if (currentRoom.user1_id === userId) setPartnerTyping(currentRoom.user2_typing || false);
         else setPartnerTyping(currentRoom.user1_typing || false);
       } catch (err) { console.error('Error fetching messages:', err); }
     };
-    
     check();
     messageCheckRef.current = setInterval(check, 500);
   };
-
   const handleTyping = async () => {
     if (!roomId) return;
-    
     try {
       const rooms = await supabase.current.select('active_rooms');
       const room = rooms.find(r => r.room_id === roomId);
@@ -232,9 +238,7 @@ export default function CampusChat() {
         else await supabase.current.update('active_rooms', `room_id=eq.${roomId}`, { user2_typing: true });
       }
     } catch (err) { console.error('Error updating typing status:', err); }
-
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-    
     typingTimeoutRef.current = setTimeout(async () => {
       try {
         const rooms = await supabase.current.select('active_rooms');
@@ -246,16 +250,12 @@ export default function CampusChat() {
       } catch (err) { console.error('Error clearing typing status:', err); }
     }, 1000);
   };
-
   const handleSendMessage = async () => {
     if (!messageInput.trim() || !isConnected || !roomId) return;
-    
     const text = messageInput;
     setMessageInput('');
-
     try {
       await supabase.current.insert('messages', { room_id: roomId, sender_id: userId, sender_name: username, message: text });
-      
       const rooms = await supabase.current.select('active_rooms');
       const room = rooms.find(r => r.room_id === roomId);
       if (room) {
@@ -264,7 +264,6 @@ export default function CampusChat() {
       }
     } catch (err) { console.error('Error sending message:', err); setMessageInput(text); }
   };
-
   const handleDisconnect = async () => {
     try {
       if (searchIntervalRef.current) { clearInterval(searchIntervalRef.current); searchIntervalRef.current = null; }
@@ -275,13 +274,11 @@ export default function CampusChat() {
         await supabase.current.delete('messages', `room_id=eq.${roomId}`);
       }
     } catch (err) { console.error('Error during disconnect:', err); }
-    finally { setIsSearching(false); setIsConnected(false); setPartnerUsername(''); setMessages([]); setRoomId(null); }
+    finally { setIsSearching(false); setIsConnected(false); setPartnerUsername(''); setPartnerCollege(''); setMessages([]); setRoomId(null); }
   };
-
-  const handleLogout = async () => { await handleDisconnect(); setIsLoggedIn(false); setUsername(''); setHashtags(''); };
+  const handleLogout = async () => { await handleDisconnect(); setIsLoggedIn(false); setUsername(''); setCollege(''); setHashtags(''); };
   const handleKeyPress = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!isLoggedIn) handleLogin(); else handleSendMessage(); } };
   const handleLogin = () => { if (username.trim()) setIsLoggedIn(true); };
-
   if (!isLoggedIn) {
     return (
       <div className={`min-h-screen ${THEMES[theme]} flex items-center justify-center p-4 relative overflow-hidden transition-all duration-500`}>
@@ -293,7 +290,6 @@ export default function CampusChat() {
             </div>
             <h1 className="text-4xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent mb-2">Campus Chat</h1>
             <p className="text-gray-600">Connect with random students</p>
-            
             <div className="flex justify-center gap-2 mt-4">
               {Object.keys(THEMES).map(t => (
                 <button key={t} onClick={() => setTheme(t)}
@@ -305,7 +301,6 @@ export default function CampusChat() {
               ))}
             </div>
           </div>
-
           <div>
             <div className="mb-6">
               <label className="block text-sm font-medium text-gray-700 mb-2">Choose a username</label>
@@ -316,12 +311,43 @@ export default function CampusChat() {
                   className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all bg-white/50 backdrop-blur" />
               </div>
             </div>
-
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-2">College Name</label>
+              <input
+                type="text"
+                value={college}
+                onChange={e => setCollege(e.target.value)}
+                placeholder="Enter your college"
+                maxLength={50}
+                className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all bg-white/50 backdrop-blur"
+              />
+            </div>
             <button onClick={handleLogin}
               className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-3 rounded-xl font-semibold hover:from-indigo-700 hover:to-purple-700 transition-all transform hover:scale-105 shadow-lg">
               Start Chatting ✨
             </button>
           </div>
+        </div>
+        {/* Centered Watermark */}
+        <div
+          style={{
+            position: 'fixed',
+            left: '50%',
+            bottom: '12px',
+            transform: 'translateX(-50%)',
+            fontSize: '15px',
+            letterSpacing: '1px',
+            color: '#4b5563',
+            background: 'rgba(255,255,255,0.88)',
+            borderRadius: '13px',
+            padding: '7px 28px',
+            boxShadow: '0 2px 12px rgba(64,64,64,0.06)',
+            fontWeight: 500,
+            zIndex: 9999,
+            pointerEvents: 'none'
+          }}
+        >
+          Made By Zoro@MEC_Thrikkakara
         </div>
       </div>
     );
@@ -331,14 +357,13 @@ export default function CampusChat() {
     <div className={`min-h-screen ${THEMES[theme]} flex items-center justify-center p-4 relative overflow-hidden transition-all duration-500`}>
       <FloatingParticles />
       {showConfetti && <Confetti />}
-      
       <div className="bg-white/90 backdrop-blur-xl rounded-3xl shadow-2xl w-full max-w-4xl h-[90vh] md:h-[700px] flex flex-col relative z-10 border border-white/20">
         <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white p-4 rounded-t-3xl flex items-center justify-between shadow-lg">
           <div className="flex items-center gap-3">
             <MessageCircle className="w-6 h-6" />
             <div>
               <h2 className="font-semibold text-sm md:text-base">Campus Chat</h2>
-              <p className="text-xs text-indigo-100">{username}</p>
+              <p className="text-xs text-indigo-100">{username} {college && <span className="ml-1">({college})</span>}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -346,6 +371,7 @@ export default function CampusChat() {
               <div className="hidden md:flex items-center gap-2 bg-white/20 backdrop-blur px-3 py-1.5 rounded-full">
                 <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
                 <span className="text-sm font-medium">{partnerUsername}</span>
+                {partnerCollege && <span className="ml-2 text-xs text-indigo-100">({partnerCollege})</span>}
               </div>
             )}
             <button onClick={handleLogout} className="text-xs md:text-sm px-3 py-1.5 bg-white/20 hover:bg-white/30 rounded-full transition-all">
@@ -408,6 +434,7 @@ export default function CampusChat() {
                 <div className="inline-flex items-center gap-3 bg-green-100 text-green-800 px-6 py-3 rounded-full font-semibold shadow-lg">
                   <Sparkles className="w-5 h-5 animate-spin" />
                   <span>Matched with {partnerUsername}!</span>
+                  {partnerCollege && <span style={{ marginLeft: '12px', fontSize: '14px', opacity: 0.7 }}>({partnerCollege})</span>}
                 </div>
               </div>
               <SkeletonLoader />
@@ -419,7 +446,7 @@ export default function CampusChat() {
               {messages.length === 0 ? (
                 <div className="text-center text-gray-500 mt-16 animate-fade-in">
                   <div className="inline-block p-6 bg-white/80 backdrop-blur rounded-2xl shadow-lg">
-                    <p className="text-base md:text-lg mb-2">Say hi to {partnerUsername}! 👋</p>
+                    <p className="text-base md:text-lg mb-2">Say hi to {partnerUsername}! 👋 {partnerCollege && <span style={{fontSize:"13px", opacity: 0.7}}>({partnerCollege})</span>}</p>
                     <p className="text-sm text-gray-400">Start the conversation!</p>
                   </div>
                 </div>
@@ -435,14 +462,14 @@ export default function CampusChat() {
                         {msg.sender_name[0].toUpperCase()}
                       </div>
                       <div className={`px-4 py-3 rounded-2xl shadow-lg transition-all ${msg.sender_id === userId ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-br-none' : 'bg-white text-gray-800 rounded-bl-none border border-gray-100'}`}>
-                        <p className="text-xs font-semibold mb-1 opacity-75">{msg.sender_name}</p>
+                        <p className="text-xs font-semibold mb-1 opacity-75">{msg.sender_name}{msg.sender_id !== userId && partnerCollege ? <span className="ml-1 text-indigo-500">({partnerCollege})</span> : null}</p>
                         <p className="break-words text-sm md:text-base">{msg.message}</p>
                       </div>
                     </div>
                   </div>
                 ))
               )}
-              
+
               {partnerTyping && (
                 <div className="flex justify-start animate-fade-in">
                   <div className="flex items-end gap-2">
@@ -459,10 +486,9 @@ export default function CampusChat() {
                   </div>
                 </div>
               )}
-              
+
               <div ref={messagesEndRef} />
             </div>
-
             <div className="border-t border-gray-200/50 p-3 md:p-4 bg-white/80 backdrop-blur">
               <div className="flex gap-2 mb-3">
                 <button onClick={handleDisconnect}
@@ -476,7 +502,6 @@ export default function CampusChat() {
                   <span className="hidden sm:inline">New Chat</span>
                 </button>
               </div>
-
               <div className="flex gap-2">
                 <input type="text" value={messageInput}
                   onChange={(e) => { setMessageInput(e.target.value); handleTyping(); }}
@@ -491,53 +516,41 @@ export default function CampusChat() {
             </div>
           </>
         )}
+        
       </div>
-      
+      {/* Watermark */}
+        <div
+          style={{
+            position: 'fixed',
+            left: '50%',
+            bottom: '12px',
+            transform: 'translateX(-50%)',
+            fontSize: '15px',
+            letterSpacing: '1px',
+            color: '#3b3d3b',
+            fontFamily: '"Montserrat", Arial, sans-serif',
+            background: 'rgba(255,255,255,0.88)',
+            borderRadius: '13px',
+            padding: '7px 28px',
+            boxShadow: '0 2px 12px rgba(64,64,64,0.06)',
+            fontWeight: 700,
+            zIndex: 9999,
+            pointerEvents: 'none'
+          }}
+        >
+          Made By Zoro@MEC_Thrikkakara
+        </div>
       <style>{`
-        @keyframes fade-in {
-          from { opacity: 0; transform: translateY(10px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        
-        @keyframes slide-in {
-          from { opacity: 0; transform: translateX(-20px); }
-          to { opacity: 1; transform: translateX(0); }
-        }
-        
-        @keyframes bounce-slow {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-10px); }
-        }
-        
-        @keyframes float {
-          0%, 100% { transform: translateY(0) rotate(0deg); }
-          50% { transform: translateY(-20px) rotate(180deg); }
-        }
-        
-        @keyframes confetti {
-          0% { transform: translateY(0) rotateZ(0deg); }
-          100% { transform: translateY(100vh) rotateZ(720deg); }
-        }
-        
-        .animate-fade-in {
-          animation: fade-in 0.3s ease-out;
-        }
-        
-        .animate-slide-in {
-          animation: slide-in 0.3s ease-out;
-        }
-        
-        .animate-bounce-slow {
-          animation: bounce-slow 2s ease-in-out infinite;
-        }
-        
-        .animate-float {
-          animation: float linear infinite;
-        }
-        
-        .animate-confetti {
-          animation: confetti linear forwards;
-        }
+        @keyframes fade-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes slide-in { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
+        @keyframes bounce-slow { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+        @keyframes float { 0%, 100% { transform: translateY(0) rotate(0deg); } 50% { transform: translateY(-20px) rotate(180deg); } }
+        @keyframes confetti { 0% { transform: translateY(0) rotateZ(0deg); } 100% { transform: translateY(100vh) rotateZ(720deg); } }
+        .animate-fade-in { animation: fade-in 0.3s ease-out; }
+        .animate-slide-in { animation: slide-in 0.3s ease-out; }
+        .animate-bounce-slow { animation: bounce-slow 2s ease-in-out infinite; }
+        .animate-float { animation: float linear infinite; }
+        .animate-confetti { animation: confetti linear forwards; }
       `}</style>
     </div>
   );
